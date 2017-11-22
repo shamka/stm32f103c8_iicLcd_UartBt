@@ -4,15 +4,14 @@
 #include "gpio.h"
 
 
-#define MAGIC_UARTRX_BUFF 64
-#define MAGIC_UARTTX_BUFF 64
+#define MAGIC_UARTRX_BUFF 512
 
-uint8_t uartBuff,uartInput[MAGIC_UARTRX_BUFF*2],uartOutut[MAGIC_UARTTX_BUFF];
 extern UART_HandleTypeDef huart1;
 extern I2C_HandleTypeDef hi2c1;
-
-
-
+extern osSemaphoreId myBSemU_RXHandle;
+volatile uint8_t goodCommandFromUartRX;
+volatile int16_t goodCommandLengthFromUartRX;
+uint8_t uartInput[MAGIC_UARTRX_BUFF];
 
 
 
@@ -21,16 +20,32 @@ extern I2C_HandleTypeDef hi2c1;
 
 void StartDefaultTask(void const * argument)
 {
-    uartBuff=0;
-    HAL_UART_Receive_DMA(&huart1, &uartInput[uartBuff], MAGIC_UARTRX_BUFF);
-    
+    static const uint8_t error1[]={1};
+    static const uint8_t error2[]={2};
+    static const uint8_t errorFF[]={0xFF};
+    static const uint8_t ok[]={0};
+    goodCommandFromUartRX=0;
+    HAL_UART_Receive_DMA(&huart1, uartInput, MAGIC_UARTRX_BUFF);
+    osSemaphoreWait(myBSemU_RXHandle,10);
     
     
   for(;;)
   {
-    osDelay(1000);
-    //HAL_UART_Transmit_DMA(&huart1, (uint8_t*)ttt, sizeof(ttt)-1);
-    HAL_GPIO_TogglePin(LED_GPIO_Port,LED_Pin);
+      if(osSemaphoreWait(myBSemU_RXHandle,10)==osOK){
+        
+          if(goodCommandLengthFromUartRX>0){
+            HAL_UART_Transmit_DMA(&huart1, (uint8_t*)ok, sizeof(ok));
+          }else{
+            HAL_UART_Transmit_DMA(&huart1, (uint8_t*)error1, sizeof(error1));
+          }
+#ifdef _DEBUG_USB_UART
+printf("UART1 DMA SS %d\r\n",goodCommandLengthFromUartRX);
+#endif
+          HAL_GPIO_TogglePin(LED_GPIO_Port,LED_Pin);
+          goodCommandFromUartRX=0;
+          HAL_UART_Receive_DMA(&huart1, uartInput, MAGIC_UARTRX_BUFF);
+      }
+    osDelay(100);
   }
 }
 
@@ -41,56 +56,43 @@ void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart){
     
 }
 void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart){
-    HAL_UART_Transmit_DMA(&huart1, &uartInput[uartBuff], MAGIC_UARTRX_BUFF);
-    if(uartBuff==0){
-        uartBuff=MAGIC_UARTRX_BUFF;
-    }
-    else{
-        uartBuff=0;
-    }
-    HAL_UART_Receive_DMA(&huart1, &uartInput[uartBuff], MAGIC_UARTRX_BUFF);
+    goodCommandFromUartRX=1;
+    HAL_UART_Receive_DMA(&huart1, uartInput, MAGIC_UARTRX_BUFF);
 #ifdef _DEBUG_USB_UART
-    printf("UART3 DMA COMPLETE\r\n");
+    printf("UART1 DMA COMPLETE\r\n");
 #endif
-
 }
 void HAL_UART_RxIdleCallback(UART_HandleTypeDef* huart){
     static uint32_t rxXferCount = 0;
-    if(huart->RxXferSize==0)return;
+#ifdef _DEBUG_USB_UART
+printf("UART1 DMA EN %d\r\n",huart->RxXferSize - __HAL_DMA_GET_COUNTER(huart->hdmarx));
+#endif
     if(huart->hdmarx != NULL)
     {
+        if(huart->RxXferSize==0)return;
         rxXferCount = huart->RxXferSize - __HAL_DMA_GET_COUNTER(huart->hdmarx);
-        if(rxXferCount==0){
-
+        huart->RxXferSize=0;
+        if(rxXferCount!=0){
+            HAL_UART_AbortReceive(huart);
+            huart->RxXferCount = 0;
 #ifdef _DEBUG_USB_UART
-            printf("UART3 IDLE 64\r\n");
+printf("UART1 DMA ABORT\r\n");
 #endif
-            return;
-        };
-        HAL_UART_Transmit_DMA(&huart1, &uartInput[uartBuff], rxXferCount);
-        /* Determine how many items of data have been received */
-        //rxXferCount = huart->RxXferSize - __HAL_DMA_GET_COUNTER(huart->hdmarx);
-        HAL_UART_AbortReceive(huart);
-        huart->RxXferCount = 0;
-        /* Check if a transmit process is ongoing or not */
-        if(huart->gState == HAL_UART_STATE_BUSY_TX_RX)
-        {
-            huart->gState = HAL_UART_STATE_BUSY_TX;
         }
-        else
-        {
+        
+        if(huart->gState == HAL_UART_STATE_BUSY_TX_RX){
+            huart->gState = HAL_UART_STATE_BUSY_TX;
+        }else{
             huart->gState = HAL_UART_STATE_READY;
         }
-        if(uartBuff==0){
-            uartBuff=MAGIC_UARTRX_BUFF;
-        }
-        else{
-            uartBuff=0;
-        }
-        HAL_UART_Receive_DMA(&huart1, &uartInput[uartBuff], MAGIC_UARTRX_BUFF);
+        if(goodCommandFromUartRX==0){
+            goodCommandLengthFromUartRX=rxXferCount;
+        }else{
+            goodCommandLengthFromUartRX=0;
+        };
 #ifdef _DEBUG_USB_UART
-    printf("UART3 IDLE\r\n");
+    printf("UART1 DMA goodCLFURX=%d\r\n",goodCommandLengthFromUartRX);
 #endif
-
+        osSemaphoreRelease(myBSemU_RXHandle);
     }
 }

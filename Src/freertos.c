@@ -57,6 +57,7 @@
 
 /* Variables -----------------------------------------------------------------*/
 osThreadId defaultTaskHandle;
+osSemaphoreId myBSemU_RXHandle;
 
 /* USER CODE BEGIN Variables */
 
@@ -83,6 +84,11 @@ void MX_FREERTOS_Init(void) {
   /* USER CODE BEGIN RTOS_MUTEX */
   /* add mutexes, ... */
   /* USER CODE END RTOS_MUTEX */
+
+  /* Create the semaphores(s) */
+  /* definition and creation of myBSemU_RX */
+  osSemaphoreDef(myBSemU_RX);
+  myBSemU_RXHandle = osSemaphoreCreate(osSemaphore(myBSemU_RX), 1);
 
   /* USER CODE BEGIN RTOS_SEMAPHORES */
   /* add semaphores, ... */
