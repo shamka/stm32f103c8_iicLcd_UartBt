@@ -217,7 +217,7 @@
                     <name>CCDefines</name>
                     <state>USE_HAL_DRIVER</state>
                     <state>STM32F103xB</state>
-                    <state>_DEBUG_USB_UART</state>
+                    <state>__DEBUG_USB_UART</state>
                 </option>
                 <option>
                     <name>CCPreprocFile</name>
