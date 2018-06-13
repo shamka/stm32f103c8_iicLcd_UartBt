@@ -8,15 +8,24 @@
 
 extern UART_HandleTypeDef huart1;
 extern I2C_HandleTypeDef hi2c1;
+extern SPI_HandleTypeDef hspi1;
+extern TIM_HandleTypeDef htim2;
+
+
 extern osSemaphoreId myBSemU_RXHandle;
 volatile uint8_t goodCommandFromUartRX;
 volatile int16_t goodCommandLengthFromUartRX;
 uint8_t uartInput[MAGIC_UARTRX_BUFF];
 
+volatile uint16_t ServoPos=0;
 
 
 
-
+void HAL_TIM_PWM_PulseFinishedCallback(TIM_HandleTypeDef *htim)
+{
+  if((htim==&htim2) && (htim->Channel==1))
+    htim->Instance->CCR1=ServoPos;
+}
 
 void StartDefaultTask(void const * argument)
 {
@@ -29,7 +38,8 @@ void StartDefaultTask(void const * argument)
     goodCommandFromUartRX=0;
     HAL_UART_Receive_DMA(&huart1, uartInput, MAGIC_UARTRX_BUFF);
     osSemaphoreWait(myBSemU_RXHandle,10);
-    
+    HAL_GPIO_WritePin(GPIOA,GPIO_PIN_6,GPIO_PIN_RESET);
+    HAL_TIM_PWM_Start_IT(&htim2,TIM_CHANNEL_1);
     
     for(;;)
     {
@@ -47,30 +57,77 @@ void StartDefaultTask(void const * argument)
               if(uartInput[1]==0){
                 if(goodCommandLengthFromUartRX==5){
                   if(uartInput[4]=='S'){
-                    while(HAL_UART_Transmit_DMA(&huart1, (uint8_t*)okUNKLengthEND_0xFF, sizeof(okUNKLengthEND_0xFF))!=HAL_OK){osDelay(10);};
+                    while(HAL_UART_Transmit_DMA(&huart1, (uint8_t*)okUNKLengthEND_0xFF, sizeof(okUNKLengthEND_0xFF))!=HAL_OK){osDelay(1);};
                     for(int i=1;i<128;i++){
-                      if(HAL_I2C_IsDeviceReady(&hi2c1,i<<1,3,20)==HAL_OK){
+                      if(HAL_I2C_IsDeviceReady(&hi2c1,i<<1,3,10)==HAL_OK){
                         while(HAL_UART_Transmit_DMA(&huart1, (uint8_t*)&i, 1)!=HAL_OK){osDelay(10);};
                       }else{
                         //while(HAL_UART_Transmit_DMA(&huart1, (uint8_t*)&i, 1)!=HAL_OK){osDelay(10);};
                       }
                     }
-                    while(HAL_UART_Transmit_DMA(&huart1, (uint8_t*)&okUNKLengthEND_0xFF[2], okUNKLengthEND_0xFF[1])!=HAL_OK){osDelay(10);};
+                    while(HAL_UART_Transmit_DMA(&huart1, (uint8_t*)&okUNKLengthEND_0xFF[2], okUNKLengthEND_0xFF[1])!=HAL_OK){osDelay(1);};
                   }
                 }
               }else{
                 if(uartInput[1]&1){
-                  
+                  goto errorFF;
                 }else{
                   if(goodCommandLengthFromUartRX>=4 && HAL_I2C_Master_Transmit(&hi2c1,uartInput[1]&0xFE,&uartInput[4],goodCommandLengthFromUartRX-4,100)==HAL_OK){
-                    while(HAL_UART_Transmit_DMA(&huart1, (uint8_t*)ok, sizeof(ok))!=HAL_OK){osDelay(10);};
+                    goto errorOK;
                   }else{
-                    while(HAL_UART_Transmit_DMA(&huart1, (uint8_t*)errorFF, sizeof(errorFF))!=HAL_OK){osDelay(10);};
+                    goto errorFF;
                   };
                 }
                 
               };break;}
-            default:HAL_UART_Transmit_DMA(&huart1, (uint8_t*)errorFF, sizeof(errorFF));
+            case 'S':{
+              static uint16_t length=0;
+              length=*((uint16_t*)&uartInput[2]) - 4;
+              if(uartInput[1]==3){
+                if((goodCommandLengthFromUartRX==5) && (uartInput[4]==0 || uartInput[4]==1)){
+                  HAL_GPIO_WritePin(SH_OE_GPIO_Port,SH_OE_Pin,uartInput[4]?GPIO_PIN_RESET:GPIO_PIN_SET);
+                  goto errorOK;
+                }else{
+                  goto errorFF;
+                };
+              }
+              if(uartInput[1]==2){
+                HAL_GPIO_WritePin(SH_CP_GPIO_Port,SH_CP_Pin,GPIO_PIN_SET);
+                //osDelay(10);
+                HAL_GPIO_WritePin(SH_CP_GPIO_Port,SH_CP_Pin,GPIO_PIN_RESET);
+              }
+              if(length>0){
+                if((goodCommandLengthFromUartRX==(length+4)) && (HAL_SPI_Transmit(&hspi1,&uartInput[4],length,100)==HAL_OK)){
+                  if(uartInput[1]==1){
+                    HAL_GPIO_WritePin(SH_CP_GPIO_Port,SH_CP_Pin,GPIO_PIN_SET);
+                    //osDelay(10);
+                    HAL_GPIO_WritePin(SH_CP_GPIO_Port,SH_CP_Pin,GPIO_PIN_RESET);
+                  }
+                  goto errorOK;
+                }else{
+                  goto errorFF;
+                };
+              }
+              else{
+                goto errorOK;
+              }
+            }
+            case 'T':{
+              if(uartInput[1]==0){
+                static uint16_t pos=0;
+                pos=uartInput[4]|(uartInput[5]<<8);
+                if((goodCommandLengthFromUartRX==6) && (pos<=40001)){
+                  ServoPos=pos;
+                errorOK:
+                  while(HAL_UART_Transmit_DMA(&huart1, (uint8_t*)ok, sizeof(ok))!=HAL_OK){osDelay(1);};
+                  break;
+                }
+              }
+              goto errorFF;
+            }
+            default:
+            errorFF:
+              while(HAL_UART_Transmit_DMA(&huart1, (uint8_t*)errorFF, sizeof(errorFF))!=HAL_OK){osDelay(1);};
             }
           }
           goodCommandFromUartRX=goodCommandLengthFromUartRX=0;
